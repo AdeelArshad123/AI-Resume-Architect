@@ -1,0 +1,6 @@
+---
+pid: 10824
+cwd: |
+  C:\Users\adeel.arshad
+---
+PS C:\Users\adeel.arshad>

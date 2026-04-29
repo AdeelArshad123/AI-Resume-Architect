@@ -1,0 +1,82 @@
+"use client";
+
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { supabase } from "@/lib/supabase/browser-client";
+import { Button } from "@/components/ui/Button";
+
+export default function SignInPage() {
+  const router = useRouter();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function onSignIn(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setBusy(true);
+    try {
+      const res = await supabase.auth.signInWithPassword({ email, password });
+      if (res.error) throw res.error;
+      router.push("/resume-builder");
+      router.refresh();
+    } catch (err: any) {
+      setError(err?.message || "Sign in failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="min-h-screen flex items-center justify-center p-4">
+      <form
+        onSubmit={onSignIn}
+        className="w-full max-w-md rounded-2xl border border-white/10 bg-white/5 p-5 backdrop-blur-xl"
+      >
+        <div className="text-lg font-semibold">Sign in</div>
+        <div className="mt-1 text-sm text-white/60">Log in to create and manage your STAR resumes.</div>
+
+        <div className="mt-4 space-y-3">
+          <label className="block text-sm">
+            <div className="text-xs text-white/60 mb-1">Email</div>
+            <input
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/90 focus:outline-none focus:ring-2 focus:ring-electric/40"
+              type="email"
+              autoComplete="email"
+              required
+            />
+          </label>
+
+          <label className="block text-sm">
+            <div className="text-xs text-white/60 mb-1">Password</div>
+            <input
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/90 focus:outline-none focus:ring-2 focus:ring-electric/40"
+              type="password"
+              autoComplete="current-password"
+              required
+            />
+          </label>
+
+          {error ? <div className="text-sm text-lavender/90">{error}</div> : null}
+
+          <Button type="submit" disabled={busy} className="w-full">
+            {busy ? "Signing in..." : "Sign In"}
+          </Button>
+
+          <div className="text-xs text-white/60 text-center">
+            New here?{" "}
+            <a className="text-electric/90 hover:underline" href="/sign-up">
+              Create an account
+            </a>
+          </div>
+        </div>
+      </form>
+    </div>
+  );
+}
+

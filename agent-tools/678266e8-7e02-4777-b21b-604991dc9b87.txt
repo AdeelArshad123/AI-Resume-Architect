@@ -1,0 +1,868 @@
+# Issue: supabase/ssr #36
+
+- Repository: supabase/ssr | Supabase clients for use in server-side rendering frameworks. | 190 stars | TypeScript
+
+## Cookies not setting properly supabase ssr
+
+- Author: [@Sof2222](https://github.com/Sof2222)
+- State: open
+- Labels: bug
+- Reactions: 👍 22
+- Created: 2024-04-14T23:25:26Z
+- Updated: 2026-02-19T16:14:30Z
+
+# Bug report
+
+I have already checked and cant see the same issue.
+
+- [x ] I confirm this is a bug with Supabase, not with my own application.
+- [x ] I confirm I have searched the [Docs](https://docs.supabase.com), GitHub [Discussions](https://github.com/supabase/supabase/discussions), and [Discord](https://discord.supabase.com).
+
+## Describe the bug
+
+I am using supabase-ssr package to log on.
+
+I thought this was only an issue in dev mode as when I ran build mode on Friday it worked, but perhaps I had not properly deleted the cookie when I was testing so am getting the error again now.
+
+Basically the auth-token cookie is not setting properly. If I log on twice, it sets but the first time i log on only sb-__-auth-token-code-verifier is set.
+I am unsure if it is something on my side which is causing the error or if there is something timing out in the setting of the second cookie. My code is below.
+Note I am using a otp sent to emails for this.
+
+## To Reproduce
+
+This is to get the code:
+
+```
+export async function signuplogin(prevState: any, formData: FormData) {
+  console.log(formData);
+  const validatedFields = schema.safeParse({
+    email: formData.get("email"),
+  });
+  console.log(validatedFields);
+
+  if (!validatedFields.success) {
+    console.log(validatedFields.error.flatten().fieldErrors.email);
+    return {
+      message: validatedFields.error.flatten().fieldErrors,
+    };
+  }
+  console.log(formData);
+  const email = formData.get("email") as string;
+  return signInOTP({ email });
+
+}
+
+```
+
+This is the server component for createClient:
+
+```
+import { createServerClient, type CookieOptions } from "@supabase/ssr";
+import { cookies } from "next/headers";
+
+export const createClient = (cookieStore: ReturnType<typeof cookies>) => {
+  return createServerClient<Database>(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        get(name: string) {
+          return cookieStore.get(name)?.value;
+        },
+        set(name: string, value: string, options: CookieOptions) {
+          try {
+            cookieStore.set({ name, value, ...options });
+          } catch (error) {
+            // The `set` method was called from a Server Component.
+            // This can be ignored if you have middleware refreshing
+            // user sessions.
+          }
+        },
+        remove(name: string, options: CookieOptions) {
+          try {
+            cookieStore.set({ name, value: "", ...options });
+          } catch (error) {
+            // The `delete` method was called from a Server Component.
+            // This can be ignored if you have middleware refreshing
+            // user sessions.
+          }
+        },
+      },
+    }
+  );
+};
+```
+
+This is to check the OTP code:
+
+```
+export async function precheckOTP(prevState: any, formData: FormData) {
+  console.log(formData);
+  const validatedFields = schema.safeParse({
+    code: formData.get("code"),
+  });
+  console.log(validatedFields);
+
+  if (!validatedFields.success) {
+    console.log(validatedFields.error.flatten().fieldErrors.code);
+    return {
+      message: validatedFields.error.flatten().fieldErrors,
+    };
+  }
+  console.log(formData);
+  const code = formData.get("code") as string;
+  const user = formData.get("user") as string;
+  return checkOTP({ token: code, user: user });
+}
+
+const checkOTP = async ({ token, user }: { token: string; user: string }) => {
+  const cookieStore = cookies();
+  const supabase = createClient(cookieStore);
+  const email = atob(user);
+
+  try {
+    const { error } = await supabase.auth.verifyOtp({
+      email,
+      token,
+      type: "email",
+      options: {
+        redirectTo: "/dashboard",
+      },
+    });
+
+    if (error) {
+      return {
+        message: { error: "Something went wrong. Please try again." },
+      };
+    }
+  } catch (error) {
+    console.log(error);
+    return {
+      message: { error: "Something went wrong. Please try again." },
+    };
+  }
+
+  return redirect("/dashboard");
+};
+```
+
+I am redirected to the dashboard.
+
+However the cookies are not being set properly. The first time:
+
+sb-___-auth-token-code-verifier is set properly.
+The second time I log on sb-___-auth-token is set
+
+(Note this is called when someone is on protected:
+
+```
+export async function updateSession(request: NextRequest) {
+  let response = NextResponse.next({
+    request: {
+      headers: request.headers,
+    },
+  });
+
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        get(name: string) {
+          return request.cookies.get(name)?.value;
+        },
+        set(name: string, value: string, options: CookieOptions) {
+          request.cookies.set({
+            name,
+            value,
+            ...options,
+          });
+          response = NextResponse.next({
+            request: {
+              headers: request.headers,
+            },
+          });
+          response.cookies.set({
+            name,
+            value,
+            ...options,
+          });
+        },
+        remove(name: string, options: CookieOptions) {
+          request.cookies.set({
+            name,
+            value: "",
+            ...options,
+          });
+          response = NextResponse.next({
+            request: {
+              headers: request.headers,
+            },
+          });
+          response.cookies.set({
+            name,
+            value: "",
+            ...options,
+          });
+        },
+      },
+    }
+  );
+
+  await supabase.auth.getUser();
+
+  return { supabase, response };
+}
+
+```
+
+I have tried with our without this: await supabase.auth.getUser();
+
+But then what happens is I get thrown from the route a moment later or if I try to navigate and I am thrown out of the protected route.
+I then have to log in again in which case the second cookie is set.
+
+## Expected behavior
+
+That the cookies would all set in the first instance and the user is not required to log on twice for them to set
+
+## Screenshots
+
+If applicable, add screenshots to help explain your problem.
+
+## System information
+
+- OS: [e.g. macOS,]
+- Browser (if applies) [e.g., safari and firefox]
+- Version of supabase-js: [e.g. 2.42.3] (ssr 0.0.10)
+- Version of Node.js: [e.g. 18.17.0]
+
+nextjs version - 14.1.4
+
+## Additional context
+
+Add any other context about the problem here.
+
+---
+
+### Timeline
+
+**Sof2222** added label `bug` · Apr 14, 2024 at 11:25pm
+
+**@aaa3334** commented · Apr 22, 2024 at 2:18am
+
+> Anyone have an idea or have the same issue? It is constantly happening so its either something in my sign up flow (which as far as I can tell is identical to the docs but I could be wrong), or an issue on supabase side.. either way would 1) need better docs or 2) is a bug in the ssr package which we have all been repeatedly told to upgrade to
+
+**@simonha9** commented · Apr 23, 2024 at 4:06pm
+
+> Can take a look at this
+
+**@simonha9** commented · Apr 30, 2024 at 2:49pm
+
+> Ok - I am unable to repro this, I am following the docs [here](https://supabase.com/docs/reference/javascript/auth-signinwithotp?queryGroups=example&example=sign-in-with-email) and [here ](https://supabase.com/docs/guides/auth/server-side/nextjs), have tried both a magiclink and OTP. afaik whether you `auth.signup/signin` with OTP you should get a session in the returned `data` , are you able to call `auth.getUser()` in the protected route after signup (1st or 2nd time)? and what do you get?
+> 
+> Also if anyone else more familiar wants to jump in please feel free to.
+
+**@aaa3334** commented · May 1, 2024 at 11:45pm
+
+> So I did quite a bit more investigation (still have no clue where the issue is) - tested in both safari and firefox. Same issue - first logon pass it doesnt set the auth cookie properly, the second it does (and it stays set too).
+> 
+> The auth-token is definitly coming through from request in the first instance - it is just not being set properly and i don't really know where it is being set.. I have tried to go through the code but I cannot see anywhere I would be eg. removing it (and if it was, it stays after the second log on everytime anyway). (only the auth-token-code-verifier is being set first pass)
+> 
+> I did upgrade a while back from using auth-helper and js, so there could potentially be some legacy code from that, but I cannot find anything obvious at least and don't have those imports in my code anymore either.
+> 
+> I have added a bunch of console.logs to the updateSession function to try and follow and see where the issues are. I also tried to set it manually (but when I set it manually it was actually removed (i saw the remove statements) the first pass then set properly the second. While the get function is definitly called many times (and especially on the first pass get finds auth-token) it is not finding auth-token upon page refresh.. (so I am guessing it is uing the headers originally, as it also does go to the dashboard but is just not being set properly).
+> 
+> I cannot see anywhere I am deleting this cookie and have searched everywhere I am accessing the cookies too.
+> 
+> I am not sure where the set functions are being called though - I don't get any console.logs from there at all... The remove I only ever saw 1 console log which was when I tried to set it myself manually. (even when the cookies are definitly being set). Is that on a different part of the supabase client maybe?
+> 
+> ```
+> export async function updateSession(request: NextRequest) {
+> let response = NextResponse.next({
+> request: {
+> headers: request.headers,
+> },
+> });
+> // console.log("request.cookies", request.cookies);
+> // console.log("response", response);
+> console.log("request", request);
+> console.log(
+> "auth cookie investigation",
+> request.cookies.get("sb-...-auth-token")?.value
+> );
+> const cookieval = request.cookies.get(
+> "sb-...-auth-token"
+> )?.value;
+> const cookievaljson = JSON.parse(cookieval || "{}");
+> console.log("auth cookie investigation json", cookievaljson.access_token);
+> console.log(
+> "auth cookie investigation options",
+> request.cookies.get("sb-...-auth-token")
+> );
+> 
+> // request.cookies.set({
+> // name: "sb-cmhsbvzpocwhojvycyin-auth-token",
+> // value: cookievaljson.access_token || "",
+> // });
+> const supabase = createServerClient(
+> process.env.NEXT_PUBLIC_SUPABASE_URL!,
+> process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+> {
+> cookies: {
+> get(name: string) {
+> console.log("cookies name", name);
+> console.log("cookies value", request.cookies.get(name)?.value);
+> 
+> return request.cookies.get(name)?.value;
+> },
+> set(name: string, value: string, options: CookieOptions) {
+> console.log(
+> `Setting cookie ${name} to ${value} with options ${JSON.stringify(
+> options
+> )}`
+> );
+> request.cookies.set({
+> name,
+> value,
+> ...options,
+> });
+> response = NextResponse.next({
+> request: {
+> headers: request.headers,
+> },
+> });
+> response.cookies.set({
+> name,
+> value,
+> ...options,
+> });
+> console.log("response after setting cookie", response);
+> },
+> remove(name: string, options: CookieOptions) {
+> console.log("cookies removing name", name);
+> console.log("cookies removing options", options);
+> request.cookies.set({
+> name,
+> value: "",
+> ...options,
+> });
+> response = NextResponse.next({
+> request: {
+> headers: request.headers,
+> },
+> });
+> response.cookies.set({
+> name,
+> value: "",
+> ...options,
+> });
+> },
+> },
+> }
+> );
+> 
+> const user = await supabase.auth.getUser();
+> console.log("User:", user);
+> // console.log("Supabase:", supabase);
+> 
+> return { supabase, response };
+> }
+> ```
+
+**@simonha9** commented · May 2, 2024 at 6:28pm
+
+> Ok super weird - I thought I was getting the error for about an hour but now it doesn't seem to want to reproduce, afaict there isn't an issue with the auth code exchange, and it only takes me 1 signup or login to see both cookies, if you upgraded from the recent auth-helpers it sounds like the main difference is the way the cookies and its properties are managed, there is [this example](https://github.com/ElectricCodeGuy/SupabaseAuthWithSSR) of supabase auth with ssr, but from the above middleware I can't find anything wrong with it. Maybe it could be something to do with the legacy code but it sounds ilke you've done a full migration :/
+> 
+> There is a possibly related ticket [here](https://github.com/supabase/supabase/issues/23452) but it's hard to tell 🤷 ,
+
+**@jayleaton** commented · May 10, 2024 at 10:28am
+
+> I have a similar issue. I think it has to do with how you are setting the cookies. For some reason we can only set a single `Set-Cookie` header with next.js I have tried all the different ways to do it and it seems to be a constant issue.
+> 
+> If there is more then 1 cookie in the header then it seems to break the auth flow. I am trying to set a cookie for sharing auth with other micro services but it does not work and I have not figured out how to modify the auth cookie to be a base level domain try only setting a single cookie once per request
+
+**aaa3334** mentioned this in issue [#24194: "supabase.auth.getUser()" is returning a null user value in nextjs middleware.ts using @supabase/supabase-js @supabase/ssr only](https://github.com/supabase/supabase/issues/24194) · May 20, 2024 at 12:22am
+
+**@aaa3334** commented · May 20, 2024 at 12:30am
+
+> > I have a similar issue. I think it has to do with how you are setting the cookies. For some reason we can only set a single `Set-Cookie` header with next.js I have tried all the different ways to do it and it seems to be a constant issue.
+> > 
+> > If there is more then 1 cookie in the header then it seems to break the auth flow. I am trying to set a cookie for sharing auth with other micro services but it does not work and I have not figured out how to modify the auth cookie to be a base level domain try only setting a single cookie once per request
+> 
+> Hm that makes sense! I guess there is a nextjs version that maybe has done this so maybe the issue is on the nextjs side not supabase's? Potentially this issue: https://github.com/vercel/next.js/issues/64166
+
+**@ahosny752** commented · May 22, 2024 at 2:34am
+
+> any fix on this? having the same issue
+
+**ThomasBurgess2000** mentioned this in issue [#26400: Next.js middleware docs show setting request cookies in place?](https://github.com/supabase/supabase/issues/26400) · May 22, 2024 at 9:29pm
+
+**@ThomasBurgess2000** commented · May 22, 2024 at 9:30pm
+
+> So I'm not _sure_ this is the same issue, but we had an issue related to cookies not getting set properly and logging us out, and removing
+> 
+> ```
+> request.cookies.set({
+> name,
+> value,
+> ...options,
+> })
+> response = NextResponse.next({
+> request: {
+> headers: request.headers,
+> },
+> })
+> ```
+> 
+> from the middleware, leaving just
+> 
+> ```
+> let response = NextResponse.next({
+> request: {
+> headers: request.headers,
+> },
+> });
+> 
+> const supabase = createServerClient (
+> process.env.NEXT_PUBLIC_SUPABASE_URL!,
+> process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+> {
+> cookies: {
+> get(name: string) {
+> return request.cookies.get(name)?.value;
+> },
+> set(name: string, value: string, options: CookieOptions) {
+> response.cookies.set(name, value, options);
+> },
+> remove(name: string, options: CookieOptions) {
+> response.cookies.set(name, "", options);
+> },
+> },
+> },
+> );
+> ```
+> 
+> fixed this for us.
+> 
+> Would be interested if this works for others.
+
+**@koolerjaebee** commented · May 23, 2024 at 7:30am
+
+> @ThomasBurgess2000 thanks for great solution! Although this solution partially works for me. If you use backend server and you stay on same page for access token's expiration time, server will send you unauthorized error due to access token expiration. If you refresh the page or move to other pages, it works fine. Any idea?
+
+**@ThomasBurgess2000** commented · May 23, 2024 at 7:38pm
+
+> @koolerjaebee I have not encountered this myself, having only recently implemented this solution, but what you're saying is quite possible. I will try to circle back to this in the next few days to test and see if I can find a solution. My workaround is not ideal, because clearly it's not what supabase intended, so I'm hoping they will chime in at some point.
+> 
+> Were you just setting the JWT expiration time really low to test? And then the behavior you're describing would happen consistently?
+
+**@koolerjaebee** commented · May 24, 2024 at 1:03am · edited
+
+> @ThomasBurgess2000
+> 
+> > Were you just setting the JWT expiration time really low to test? And then the behavior you're describing would happen consistently?
+> 
+> Yes, I was setting JWT expiration time to 1 min so that I can see if there is another error. 1 hour was my original setting and actually not a big problem because not many people would stay in same page for that long.
+> I've tested several time and it keep happened no matter what time I set. I just set expiration time to 24 hours for temporarily. Like you said, I hope they will figure it out. 
+> Again thanks for sharing your idea.
+
+**@Yassdrk** commented · May 31, 2024 at 9:46pm
+
+> Any news ? I have the same issue with supabase ssr and last nextjs version :/
+
+**@ahosny752** commented · May 31, 2024 at 10:11pm
+
+> I fixed my issues by removing any auth stuff from server actions and putting them in routes. I think something with Next Caching causes bugs with the cookies
+
+**@fernando-plank** commented · Jul 2, 2024 at 2:50pm · edited
+
+> still have an error event update to latest version of `@supabase/ssr`.
+> 
+> I did a quick fix that solved the error.
+> In the process of sign-in, I save a cookie reference for refresh and access tokens (sb-access-token, sb-refresh-token)
+> 
+> ```ts
+> const cookieStore = cookies();
+> 
+> const { data, error } = await repository.auth.signInWithPassword({
+> email,
+> password,
+> });
+> 
+> cookieStore.set('sb-access-token', data?.session?.access_token);
+> cookieStore.set('sb-refresh-token', data?.session?.refresh_token);
+> ```
+> 
+> When I try to capture user information in my API routes I've an auxiliary function:
+> 
+> ```ts
+> retrieveAuthOrSessionUser = async () => {
+> let userFinal = null;
+> const cookieStore = cookies();
+> const accessToken = cookieStore.get('sb-access-token');
+> const refreshToken = cookieStore.get('sb-refresh-token');
+> 
+> const {
+> data: { user },
+> error,
+> } = await this.supabase.auth.getUser();
+> 
+> if (error) {
+> const { data: dataSession } = await this.supabase.auth.setSession({
+> access_token: accessToken?.value ?? '',
+> refresh_token: refreshToken?.value ?? '',
+> });
+> userFinal = dataSession?.user;
+> } else {
+> userFinal = user;
+> }
+> 
+> const { id } = userFinal ?? {};
+> 
+> return {
+> id: id ?? '',
+> };
+> };
+> ```
+> 
+> Remember to erase the cookies on the process of sign-out
+> 
+> ```ts
+> const supabaseCookies = cookies().getAll();
+> 
+> supabaseCookies.map((cookie) => {
+> if (cookie.name.includes('sb-')) {
+> cookies().delete(cookie.name);
+> }
+> });
+> 
+> ```
+> 
+> isn't the best scenario or code, but does the job. Hope this Helps.
+
+**encima** transferred this · Jul 8, 2024 at 9:16am
+
+**@j4w8n** commented · Jul 8, 2024 at 1:22pm
+
+> I'm not familiar with Next, but has anyone tried migrating to the new ssr 0.4.x version and using the setAll and getAll methods? It's supposed to better handle Next quirkiness. New docs are available [here](https://supabase.com/docs/guides/auth/server-side/nextjs?queryGroups=router&router=app)
+
+**@Sof2222** commented · Jul 16, 2024 at 2:08am · Author
+
+> For anyone having the issues - I think it is a nextjs issue. Updating nextjs solved it and I have not had this issue the past week (have been testing)
+
+**@j4w8n** commented · Jul 16, 2024 at 7:07pm
+
+> > For anyone having the issues - I think it is a nextjs issue. Updating nextjs solved it and I have not had this issue the past week (have been testing)
+> 
+> To what version?
+
+**@lukahukur** commented · Jul 17, 2024 at 7:11am
+
+> > For anyone having the issues - I think it is a nextjs issue. Updating nextjs solved it and I have not had this issue the past week (have been testing)
+> 
+> Ye, for what version?
+
+**Pbmangan** mentioned this in issue [#67814: Cookies set in middleware missing on server actions](https://github.com/vercel/next.js/issues/67814) · Jul 17, 2024 at 6:02pm
+
+**@NotAProton** commented · Jul 18, 2024 at 4:08pm
+
+> Thanks a lot @Sof2222!
+> 
+> For reference I upgraded from `"next": "14.2.4",` to `"next": "14.2.5",` and it fixed the issue
+
+**@eposha** commented · Jul 19, 2024 at 3:45am
+
+> Same issue, any solutions? Next.js 14.2.5 doen't resolve this problem for me
+
+**@cnexans** commented · Jul 24, 2024 at 12:41am
+
+> We are experiencing this exact same issue. Next version 14.2.5.
+
+**@eposha** commented · Jul 24, 2024 at 12:51am
+
+> In my case, I used `export const dynamic = 'force-dynamic'` in a layout that blocked cookies on the first render.
+
+**@mattrigg9** commented · Aug 1, 2024 at 10:21pm
+
+> This doesn't directly solve OP's problem, but just throwing this out there in case anyone's banging their head against the table. Make sure you don't have any logout links inadvertently getting prefetched. My supabase auth cookie was getting assigned correctly, but then NextJS would prefetch the logout link on my account page, causing the server to immediately delete the cookie.
+
+**@AndrewLester** commented · Aug 7, 2024 at 6:35am
+
+> In the password reset case, with Next.js pages router on 14.2.5 and most recent versions of @supabase/ssr and @supabase/auth-js (at time of this post), I have this workaround:
+> 
+> ```ts
+> // @filename: src/pages/api/auth/confirm.ts
+> import { type EmailOtpType } from '@supabase/supabase-js';
+> import type { NextApiRequest, NextApiResponse } from 'next';
+> 
+> import { createClient } from '@/lib/utils/supabase/api';
+> import { serializeCookieHeader, stringToBase64URL } from '@supabase/ssr';
+> 
+> function stringOrFirstString(item: string | string[] | undefined) {
+> return Array.isArray(item) ? item[0] : item;
+> }
+> 
+> export default async function handler(
+> req: NextApiRequest,
+> res: NextApiResponse,
+> ) {
+> if (req.method !== 'GET') {
+> res.status(405).appendHeader('Allow', 'GET').end();
+> return;
+> }
+> 
+> const queryParams = req.query;
+> const token_hash = stringOrFirstString(queryParams.token_hash);
+> const type = stringOrFirstString(queryParams.type);
+> 
+> let next = '/error';
+> 
+> if (token_hash && type) {
+> const supabase = createClient(req, res);
+> const { error, data } = await supabase.auth.verifyOtp({
+> type: type as EmailOtpType,
+> token_hash,
+> });
+> if (error) {
+> console.error(error);
+> } else {
+> // Workaround for https://github.com/supabase/ssr/issues/36
+> const supabaseURL = new URL(process.env.NEXT_PUBLIC_SUPABASE_URL!);
+> const supabaseCookieDomainPrefix = supabaseURL.hostname.split('.')[0];
+> const authTokenCookie = {
+> name: `sb-${supabaseCookieDomainPrefix}-auth-token`,
+> value: `base64-${stringToBase64URL(JSON.stringify(data.session!))}`,
+> options: {
+> path: '/',
+> sameSite: 'lax',
+> httpOnly: false,
+> maxAge: 31536000000,
+> },
+> };
+> res.setHeader(
+> 'Set-Cookie',
+> [authTokenCookie].map(({ name, value, options }) =>
+> serializeCookieHeader(name, value, options),
+> ),
+> );
+> next = stringOrFirstString(queryParams.next) || '/';
+> }
+> }
+> 
+> res.redirect(next);
+> }
+> ```
+> 
+> Maybe I've configured something wrong, but this if statement never runs the if branch because setItem is never called with the code-verifier cookie as the key:
+> https://github.com/supabase/ssr/blob/ae6af1d3f9a405dc8251b595a6b3a3c9d56b9b7f/src/cookies.ts#L358
+
+**@uripg** commented · Aug 18, 2024 at 1:40pm
+
+> > This doesn't directly solve OP's problem, but just throwing this out there in case anyone's banging their head against the table. Make sure you don't have any logout links inadvertently getting prefetched. My supabase auth cookie was getting assigned correctly, but then NextJS would prefetch the logout link on my account page, causing the server to immediately delete the cookie.
+> 
+> God thank you, I rarely use NEXTJS and I always forget to remove the prefetch behaviour
+
+**@benrobertsonio** commented · Sep 12, 2024 at 4:55pm
+
+> @mattrigg9 you are a hero. thank you!
+
+**@ksloan** commented · Sep 15, 2024 at 8pm
+
+> @mattrigg9 I got caught by the exact same thing, thanks for the tip.
+> 
+> In my case this was only happening in production since ["Prefetching is not enabled in development, only in production."](https://nextjs.org/docs/app/building-your-application/routing/linking-and-navigating#2-prefetching)
+
+**@foadgr** commented · Sep 30, 2024 at 5:55am
+
+> tldr; it may be worth checking for version incompatibilities between the Supabase libraries being used.
+> 
+> i had this issue and resolved by making sure all supabase actions were using @supabase/ssr. It's possible you are using @supabase/auth-helpers-nextjs elsewhere in your app. Improper setting in the cookie likely stems from using different supabase client creation methods in different parts of your app.
+
+**@AdzeB** commented · Sep 30, 2024 at 5:58am
+
+> I have the same problem and I am using the latest version of the superbase client and also not using @supabase/auth-helpers-nextjs... My Quick fix(which still doesn't work for all my users) is to set the cookie manually
+
+**@jbro-io** commented · Nov 7, 2024 at 3:38am
+
+> > This doesn't directly solve OP's problem, but just throwing this out there in case anyone's banging their head against the table. Make sure you don't have any logout links inadvertently getting prefetched. My supabase auth cookie was getting assigned correctly, but then NextJS would prefetch the logout link on my account page, causing the server to immediately delete the cookie.
+> 
+> You sir are a godsend, thank you!
+
+**@simon-marcus** commented · Dec 14, 2024 at 7:20pm · edited
+
+> I'm on Next 14.2.20 (the latest version of Next 14). After mildly excruciating debugging, I realized that upgrading the `@supabase/ssr` package from `0.3.0` to `0.5.0` introduced a variety of auth issues that would remove the cookie from the browser. Upgrading to `@ssr@0.52` appears to have fixed the issue.
+
+**@rishabhsxn** commented · Dec 19, 2024 at 9:42pm
+
+> > This doesn't directly solve OP's problem, but just throwing this out there in case anyone's banging their head against the table. Make sure you don't have any logout links inadvertently getting prefetched. My supabase auth cookie was getting assigned correctly, but then NextJS would prefetch the logout link on my account page, causing the server to immediately delete the cookie.
+> 
+> Can someone explain this?
+> I'm new to NextJs and facing the same issue.
+> When I call supabaseClient.auth.signup(), the cookies are not being set (only the auth-token-code-verifier cookie is set)
+> But when I login using email and password, the auth-token cookie is successfully set.
+> 
+> I'm not sure if I'm facing this issue because of the mentioned reason of pre-fetching (I'm facing this issue in local development)
+
+**@rishabhsxn** commented · Dec 19, 2024 at 10:01pm · edited
+
+> Nevermind.
+> Found the root cause.
+> I had `Confirm email` setting on in the Supabase -> Auth Providers -> Email
+> 
+> When this setting is ON, the auth-token cookie won't be created unless the user confirms the email via the Confirmation link
+
+**@PatrickHallek** commented · Jan 17, 2025 at 2:44pm · edited
+
+> While this might not be the exact issue for the OP, here is a reminder to double-check your host redirections.
+> 
+> I experienced very similar symptoms in my local application, and the root cause turned out to be surprisingly simple. In my callback hook, I was redirecting to `http://localhost:3000` instead of `http://127.0.0.1:3000`.
+> 
+> As a result, the session tokens were being set correctly on `127.0.0.1:3000`, but after the redirect to `localhost:3000`, I had to log in again.
+
+**@handlebauer** commented · Jan 19, 2025 at 10:35pm
+
+> My solution was similar to @PatrickHallek's
+> 
+> Needed to update the values for `site_url` and `additional_redirect_urls` to use `localhost` in my`config.toml`
+
+**@w7tf** commented · Feb 2, 2025 at 6:38pm
+
+> Might not be the same issue as OP but in my case it was the streaming API that was causing the issue.
+> 
+> I am using tRPC in my case I had to switch from unstable_httpBatchStreamLink to httpBatchLink
+> 
+> **If you're not using tRPC** check if any streaming API within your framework is causing the issue.
+
+**@JorensM** commented · Feb 10, 2025 at 10:36pm
+
+> My silly mistake was that I was signing the user in from the server via server actions. I used the Supabase client from the client side and everything started working.
+
+**@gtmetric** commented · Feb 19, 2025 at 7:11am · edited
+
+> I encountered a similar issue. In my reset-password flow, I got the correct values in `request.cookies` in my API endpoint, but after redirecting to a new page, the cookies were gone. I managed to solve this by setting the `request.cookies` in the Next.js cookie store manually.
+> 
+> This is the code for that.
+> 
+> ```ts
+> import { cookies } from 'next/headers'
+> 
+> export async function GET(req: NextRequest) {
+> // Some logic ...
+> 
+> // Manually updating all cookies
+> const cookieStore = cookies()
+> for (const cookie of req.cookies.getAll()) {
+> cookieStore.set(cookie.name, cookie.value)
+> }
+> 
+> return NextResponse.redirect(' ')
+> }
+> ```
+
+**@DanielGiljam** commented · Apr 16, 2025 at 7:21am · edited
+
+> I had this issue just now when trying to set up [Password-Based Auth](https://supabase.com/ui/docs/nextjs/password-based-auth) from the (quite recent, I think) Supabase UI Library.
+> 
+> After lots of debugging, I think I figured out the root cause. Not sure if anyone has mentioned it before, didn't bother reading through all the comments and nothing was particularly highlighted as a solution, so I assume it hasn't been mentioned before.
+> 
+> Anyways, what I found is that it came down to how browsers treat the [`Set-Cookie`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Set-Cookie) header in redirect responses.
+> 
+> When I inspected the response from reset password email link (`GET /auth/confirm?token_hash=...`), I found that in the response, the `Set-Cookie` header was set properly. So it looked something like this:
+> 
+> ```
+> GET /auth/confirm?token_hash=...
+> Host: 127.0.0.1:3000
+> ...
+> 
+> HTTP/1.1 307 Temporary Redirect
+> Location: http://localhost:3000/auth/update-password
+> Set-Cookie: sb-127-auth-token=base64-...
+> ...
+> ```
+> 
+> The catch is that because the origin of the original request URL and the redirect response's [`Location`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Location) differ, the browser will ignore the `Set-Cookie` header of the redirect response.
+> 
+> There are cases where browsers would still respect the `Set-Cookie` header in a cross-origin redirect response, e.g. if [`SameSite`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Set-Cookie#samesitesamesite-value) is [`None`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Set-Cookie#none) and [`Secure`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Set-Cookie#secure) is set for the cookie's options. But in this case, the cookie's options (at least in development) were:
+> 
+> ```
+> Path=/; Expires=Thu, 21 May 2026 06:26:18 GMT; Max-Age=34560000; SameSite=lax
+> ```
+> 
+> The solution is to ensure [`SITE_URL`](https://supabase.com/docs/guides/auth/redirect-urls) always is the same origin as the URL that you pass to the `redirectTo` option in [`auth.resetPasswordForEmail`](https://supabase.com/docs/reference/javascript/auth-resetpasswordforemail) (or to the `emailRedirectTo` option in [`auth.signUp`](https://supabase.com/docs/reference/javascript/auth-signup) for that matter).
+> 
+> So, in short, this kind of reset password email link won't work:
+> 
+> ```
+> ❌ won't work
+> http://127.0.0.1:3001/auth/confirm?token_hash=pkce_...&type=recovery&next=http%3a%2f%2flocalhost%3a3001%2fauth%2fupdate-password
+> ```
+> 
+> But this kind will:
+> 
+> ```
+> ✅ will work
+> http://127.0.0.1:3001/auth/confirm?token_hash=pkce_...&type=recovery&next=http%3a%2f%2f127.0.0.1%3a3001%2fauth%2fupdate-password
+> ```
+
+**@DanielGiljam** commented · Apr 16, 2025 at 7:35am · edited
+
+> > While this might not be the exact issue for the OP, here is a reminder to double-check your host redirections.
+> > 
+> > I experienced very similar symptoms in my local application, and the root cause turned out to be surprisingly simple. In my callback hook, I was redirecting to `http://localhost:3000` instead of `http://127.0.0.1:3000`.
+> > 
+> > As a result, the session tokens were being set correctly on `127.0.0.1:3000`, but after the redirect to `localhost:3000`, I had to log in again.
+> 
+> Okay, this was mentioned before 😅 should read comments more carefully next time. Well, at least for me, I experienced cookies not setting properly when using `@supabase/ssr` and this was the solution! Maybe not exact issue for the OP (perhaps why this issue is still open), but I suspect a lot of the people who left comments on this issue with weird workarounds, which I also tried for a while, might have also just have had the same issue as @PatrickHallek, @handlebauer, and me.
+> 
+> For me though, the tokens weren't being set correctly on `127.0.0.1:3000` either — the `Set-Cookie` header was being completely ignored by my browser. But this behavior of how `Set-Cookie` headers are treated in cross-origin redirect responses might vary between browsers and browser versions.
+
+**@elvinjgalarza** commented · May 12, 2025 at 3:52am · edited
+
+> > > While this might not be the exact issue for the OP, here is a reminder to double-check your host redirections.
+> > > I experienced very similar symptoms in my local application, and the root cause turned out to be surprisingly simple. In my callback hook, I was redirecting to `http://localhost:3000` instead of `http://127.0.0.1:3000`.
+> > > As a result, the session tokens were being set correctly on `127.0.0.1:3000`, but after the redirect to `localhost:3000`, I had to log in again.
+> > 
+> > Okay, this was mentioned before 😅 should read comments more carefully next time. Well, at least for me, I experienced cookies not setting properly when using `@supabase/ssr` and this was the solution! Maybe not exact issue for the OP (perhaps why this issue is still open), but I suspect a lot of the people who left comments on this issue with weird workarounds, which I also tried for a while, might have also just have had the same issue as [@PatrickHallek](https://github.com/PatrickHallek), [@handlebauer](https://github.com/handlebauer), and me.
+> > 
+> > For me though, the tokens weren't being set correctly on `127.0.0.1:3000` either — the `Set-Cookie` header was being completely ignored by my browser. But this behavior of how `Set-Cookie` headers are treated in cross-origin redirect responses might vary between browsers and browser versions.
+> 
+> Still happening for me on the same domain (localhost), so not doing cross origin... will update if I find a solution
+> 
+> Edit: Figured it out a bit hacky and not sure if there's a better way to do it, but I'm content for now... [link to my solution](https://github.com/orgs/supabase/discussions/35615)!
+
+**@matteopaoli** commented · May 15, 2025 at 8:43am · edited
+
+> I had a similar issue where the auth cookie was not set, I've realized the problem was i was using two different URLs to connect to my supabase instance between client-side and server-side
+> 
+> NEXT_PUBLIC_SUPABASE_URL=https://supabase.domain.app // client-side
+> SERVER_SUPABASE_URL=http://kong:4000 // server-side
+> 
+> this mismatch caused the cookie to have a different name than the one expected
+
+**alroy** mentioned this in PR [#30: Fix: Use Supabase's original cookie options without overriding](https://github.com/alroy/Knots/pull/30) · Jan 24, 2026 at 12:19pm
+
+**@mandarini** commented · Feb 19, 2026 at 4:14pm · edited
+
+> Hi, we think the root cause here (at least for the cases where cookies are missing on first login) has been fixed in `@supabase/ssr@0.9.0-rc.6`.
+> 
+> **Root cause:** When `createServerClient` was constructed, the underlying `GoTrueClient` immediately kicked off `initialize()` as a background promise. If that token refresh completed *after* the HTTP response was already generated, the `setAll` cookie handler was called too late — the cookies never made it into the response. On the next request the refresh had already happened server-side, so it appeared to "work" the second time.
+> 
+> **Fix:** `createServerClient` now sets `skipAutoInitialize: true`. No background init fires at construction time; session loading is deferred until your first `getSession()` / `getUser()` call, which you control within the request lifecycle.
+> 
+> ```bash
+> npm install @supabase/ssr@0.9.0-rc.6 @supabase/supabase-js@^2.97.0
+> ```
+> 
+> Please test and report back, we'd love to confirm this resolves it before promoting to stable.
+> 
+> Thank you for contributing to Supabase! 💚
+
+**mandarini** linked a pull request that may close this · Feb 19, 2026 at 4:16pm
+
+**coderabbitai[bot]** mentioned this in PR [#1: Add CLAUDE.md with comprehensive codebase documentation](https://github.com/analist0/ai-client-dashboard/pull/1) · Feb 21, 2026 at 10:13pm
+
+**coderabbitai[bot]** mentioned this in PR [#3: Implement admin auth, sidebar, and codebase cleanup](https://github.com/UgaTheDev/H4I_CampusCloset/pull/3) · Mar 30, 2026 at 5:32am
+
+**coderabbitai[bot]** mentioned this in PR [#12: Enhancement: Harden Admin Controls & Global Configuration](https://github.com/Arra71171/fungga_wari_lab/pull/12) · Apr 20, 2026 at 3:20am
+
+**coderabbitai[bot]** mentioned this in PR [#1: feat: add comment thread component for nested comments](https://github.com/kudosscience/epic-ai-safety-fails/pull/1) · Apr 20, 2026 at 8:51am
