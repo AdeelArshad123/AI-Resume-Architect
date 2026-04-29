@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # AI Storytelling Resume Builder (2026)
 
 Tech stack: Next.js 15 (App Router), TypeScript, Tailwind, Framer Motion, Zustand, Supabase, Gemini/OpenAI.
@@ -20,3 +21,6 @@ Tech stack: Next.js 15 (App Router), TypeScript, Tailwind, Framer Motion, Zustan
 
 `npm run dev`
 
+=======
+# AI-Resume-Architect
+>>>>>>> 95eaa54633811048a03dcff2af917903784e62b4
